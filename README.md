@@ -1,58 +1,60 @@
 # ◆ ProspectFlow
 
-> **Logiciel open-source de prospection email — 100% local, gratuit, sans dépendance cloud.**
+> **Open-source email outreach software — 100% local, free, no cloud dependency.**
 
-*Ce logiciel a été initialement généré avec l'assistance de l'intelligence artificielle.*  
-*Créé par [GoLynk Société Simple](https://golynk.ch) — Valais, Suisse.*
+*This software was originally generated with the assistance of artificial intelligence.*
+*Created by [GoLynk Société Simple](https://golynk.ch) — Valais, Switzerland.*
 
 ---
 
-ProspectFlow automatise l'envoi d'emails de prospection, détecte les ouvertures et réponses, gère le pipeline de conversion et respecte les lois suisses (nLPD) et européennes (RGPD) — le tout depuis votre machine.
+ProspectFlow automates cold email outreach with multi-step follow-up sequences, tracks opens and replies, manages your conversion pipeline with a Kanban board, and provides real-time analytics — all running locally on your machine.
 
-## ✨ Fonctionnalités
+## ✨ Features
 
-- **Envoi automatique** — file d'attente avec fréquence configurable (instantané → 1x/jour)
-- **Détection des réponses** — scan IMAP automatique toutes les 2 minutes
-- **Pixel tracking** — détection des ouvertures d'email
-- **Blacklist & désabonnement** — lien "Ne plus être contacté" + module blacklist complet
-- **KPI** — taux d'ouverture, réponse, conversion
-- **Règles automatiques** — ouvert sans réponse > 2h → en attente, 10 jours → refusé
-- **Thème clair/sombre** — interface React responsive (desktop, tablette, mobile)
-- **Raccourcis** — Ctrl+K recherche, Escape ferme, clic droit contextuel
-
-## 📸 Aperçu
-
-| Pipeline (dark) | KPI | Blacklist |
-|---|---|---|
-| Vue Kanban avec 7 colonnes | Statistiques en temps réel | Gestion des désabonnements |
+- **Pipeline** — Kanban board with 7 columns, drag & drop, heat score indicators
+- **Multi-step sequences** — automatic follow-ups (e.g. Day+3, Day+7) if no reply
+- **Campaigns** — group prospects by campaign with per-campaign analytics
+- **Tags & heat score** — label prospects, auto-calculated engagement score (🔥🟠🟡)
+- **Send scheduling** — restrict sending to business hours (e.g. 9-12h, 14-17h, weekdays only)
+- **Bounce detection** — automatically detects invalid emails (SMTP 550-554 codes)
+- **Open tracking** — invisible pixel tracking in each email
+- **Blacklist & unsubscribe** — unsubscribe link in every email, automatic blacklisting
+- **CSV import/export** — import prospects from CSV files, export results
+- **Email preview** — see exactly what the prospect will receive before sending
+- **Test mode** — send yourself a test email before launching a campaign
+- **Analytics dashboard** — KPIs, time charts (daily/weekly), conversion funnel, pie chart, activity feed
+- **Notes** — built-in notepad with auto-save
+- **Notifications** — bell icon with real-time open/reply alerts
+- **Dark/Light theme** — responsive interface (desktop, tablet, mobile)
+- **Keyboard shortcuts** — Ctrl+K search, Escape to close, right-click context menu
+- **Export/Import** — backup and restore your data as JSON
 
 ## 📦 Installation
 
-### Prérequis
+### Prerequisites
 
 - **Python 3.11+** → [python.org](https://www.python.org/downloads/)
 - **Node.js 18+** → [nodejs.org](https://nodejs.org/)
-- **Git** → [git-scm.com](https://git-scm.com/)
 
-### 1. Cloner le projet
+### 1. Clone the project
 
 ```bash
-git clone https://github.com/VOTRE_USERNAME/prospectflow.git
+git clone https://github.com/GoLynk-Project/prospectflow.git
 cd prospectflow
 ```
 
-### 2. Installer et lancer le backend
+### 2. Start the backend
 
 ```bash
 cd backend
 pip install -r requirements.txt
-python -m uvicorn main:app --reload --port 8000
+python main.py
 ```
 
-> Le backend démarre sur `http://localhost:8000`  
-> Documentation API interactive : `http://localhost:8000/docs`
+> Backend runs on `http://localhost:8000`
+> API docs: `http://localhost:8000/docs`
 
-### 3. Installer et lancer le frontend
+### 3. Start the frontend
 
 ```bash
 cd frontend
@@ -60,44 +62,41 @@ npm install
 npm run dev
 ```
 
-> Le frontend démarre sur `http://localhost:5173`
+> Frontend runs on `http://localhost:5173`
 
-### 4. Configurer votre email
+### 4. Configure SMTP
 
-1. Ouvrez `http://localhost:5173`
-2. Cliquez sur **⚙ Config SMTP** dans la sidebar
-3. Renseignez votre serveur SMTP :
+1. Open `http://localhost:5173`
+2. Click **⚙ SMTP Config** in the sidebar
+3. Enter your SMTP details:
 
-| Champ | Gmail | Infomaniak |
-|-------|-------|------------|
-| Serveur | `smtp.gmail.com` | `mail.infomaniak.com` |
-| Port | `587` | `587` |
-| Email | votre@gmail.com | votre@domain.ch |
-| Mot de passe | App Password* | votre mot de passe |
+| Field | Gmail | Hostinger | Other |
+|-------|-------|-----------|-------|
+| Host | `smtp.gmail.com` | `smtp.hostinger.com` | Check provider |
+| Port | `587` | `465` | `587` or `465` |
+| Email | you@gmail.com | you@domain.com | your email |
+| Password | App Password* | email password | your password |
+| Sender Name | Your Name | Your Name | Your Name |
 
-**\*Gmail** : Allez dans [Paramètres Google](https://myaccount.google.com/apppasswords) → Activez la vérification en 2 étapes → Créez un "Mot de passe d'application".
+**\*Gmail**: Enable 2FA → [Create App Password](https://myaccount.google.com/apppasswords)
 
-### 5. C'est prêt !
-
-- Ajoutez des prospects (un par un ou import en masse)
-- Personnalisez le template email
-- Activez l'envoi avec le switch dans la barre du haut
-- Surveillez vos KPI
+SMTP config is saved in `backend/config.json` (gitignored).
 
 ## 🏗 Architecture
 
 ```
 prospectflow/
 ├── backend/
-│   ├── main.py              # API FastAPI — routes, tracking pixel, page désabonnement
-│   ├── database.py          # SQLite — prospects, blacklist, config, CRUD complet
-│   ├── email_sender.py      # Envoi SMTP — pixel tracking + lien désabonnement
-│   ├── email_reader.py      # Lecture IMAP — détection automatique des réponses
-│   ├── scheduler.py         # APScheduler — envoi auto, vérif IMAP, règles statut
+│   ├── main.py              # FastAPI — all routes, tracking, unsubscribe page
+│   ├── database.py          # SQLite — all tables, heat score, activity logging
+│   ├── email_sender.py      # SMTP sending with bounce detection
+│   ├── scheduler.py         # APScheduler — auto-send, auto-status rules
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
-│   │   └── App.jsx          # Interface React complète
+│   │   ├── App.jsx          # Complete React interface (900+ lines)
+│   │   ├── api.js           # API wrapper for backend communication
+│   │   └── main.jsx
 │   ├── index.html
 │   ├── package.json
 │   └── vite.config.js
@@ -106,43 +105,55 @@ prospectflow/
 └── README.md
 ```
 
-## 📡 API
+## 📡 API Endpoints
 
-| Méthode | Route | Description |
-|---------|-------|-------------|
-| `GET` | `/api/prospects` | Liste les prospects |
-| `POST` | `/api/prospects` | Ajouter (vérifie blacklist + doublons) |
-| `POST` | `/api/prospects/bulk` | Import en masse |
-| `PATCH` | `/api/prospects/:id` | Modifier |
-| `DELETE` | `/api/prospects/:id` | Supprimer |
-| `POST` | `/api/send/next` | Envoyer le prochain |
-| `POST` | `/api/send/one/:id` | Envoyer manuellement |
-| `POST` | `/api/send/all` | Envoyer toute la file |
-| `GET/POST/DELETE` | `/api/blacklist` | CRUD blacklist |
-| `GET` | `/api/kpis` | Statistiques |
-| `GET` | `/track/open/:id` | Pixel tracking (automatique) |
-| `GET` | `/unsubscribe/:token` | Page de désabonnement |
+| Method | Route | Description |
+|--------|-------|-------------|
+| **Prospects** | | |
+| `GET` | `/api/prospects` | List all prospects |
+| `POST` | `/api/prospects` | Add prospect |
+| `POST` | `/api/prospects/bulk` | Bulk import |
+| `PATCH` | `/api/prospects/:id` | Update prospect |
+| `DELETE` | `/api/prospects/:id` | Delete |
+| **Email** | | |
+| `GET/PUT` | `/api/template` | Email template |
+| `GET/PUT` | `/api/send-config` | Send configuration |
+| `GET/PUT` | `/api/smtp` | SMTP configuration |
+| `POST` | `/api/send-test` | Send test email |
+| **Sequences** | | |
+| `GET` | `/api/sequences` | List sequences |
+| `GET/POST/PATCH/DELETE` | `/api/sequence-steps` | Manage steps |
+| **Campaigns** | | |
+| `GET/POST/PATCH/DELETE` | `/api/campaigns` | Manage campaigns |
+| **Tags** | | |
+| `GET/POST/DELETE` | `/api/tags` | Manage tags |
+| `GET/POST/DELETE` | `/api/prospect-tags` | Assign/remove tags |
+| **Other** | | |
+| `GET/POST/DELETE` | `/api/blacklist` | Blacklist management |
+| `GET/POST/PATCH/DELETE` | `/api/notes` | Notes |
+| `GET` | `/api/activity` | Activity log |
+| `GET` | `/api/kpis` | Statistics |
+| `GET` | `/track/open/:id` | Pixel tracking |
+| `GET` | `/unsubscribe/:token` | Unsubscribe page |
 
-## 🔒 Conformité légale
+## 🔒 Legal Compliance
 
-- **nLPD (Suisse)** / **RGPD (UE)** : lien de désabonnement dans chaque email
-- **Blacklist** : les désabonnements sont définitifs — impossible d'envoyer aux adresses blacklistées
-- **Données locales** : tout reste sur votre machine, rien dans le cloud
+- **GDPR / nLPD**: unsubscribe link in every email
+- **Blacklist**: unsubscriptions are permanent
+- **Local data**: everything stays on your machine
 
-## 🤝 Contribuer
+## 🤝 Contributing
 
-Les contributions sont les bienvenues ! Forkez le projet, créez une branche, et envoyez une Pull Request.
+Contributions are welcome! Fork the project, create a branch, and submit a Pull Request.
 
-## 📄 Licence
+## 📄 License
 
-Licence personnalisée — open source avec attribution obligatoire.  
-Voir [LICENSE](./LICENSE) pour les détails complets.
+Custom open-source license with mandatory attribution. See [LICENSE](./LICENSE).
 
-**En résumé :** vous pouvez utiliser, modifier, distribuer et vendre ce logiciel, à condition de :
-1. Créditer **GoLynk Société Simple** (https://golynk.ch)
-2. Mentionner que le logiciel a été **généré avec l'assistance de l'IA**
+**In short:** you can use, modify, distribute and sell this software, provided you:
+1. Credit **GoLynk Société Simple** (https://golynk.ch)
+2. Disclose that the software was **originally generated with AI assistance**
 
 ---
 
-**Built with ProspectFlow, created by [GoLynk Société Simple](https://golynk.ch)**  
-*This software was originally generated with the assistance of AI.*
+**Built with ProspectFlow, created by [GoLynk Société Simple](https://golynk.ch)**

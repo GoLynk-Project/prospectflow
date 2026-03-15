@@ -1,133 +1,150 @@
-"""
-ProspectFlow — Scheduler
-Background tasks: auto-send, reply checking, auto-status rules.
-"""
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.interval import IntervalTrigger
-from datetime import datetime, timedelta
-from database import (
-    get_send_config, get_all_prospects, update_prospect,
-    get_queue_prospects
-)
-from email_sender import send_next_in_queue
-from email_reader import check_replies
+from datetime import datetime
+import pytz
 
 scheduler = BackgroundScheduler()
-_send_job_id = "auto_send"
 
+def get_smtp_config():
+    """Read SMTP config from config.json or env"""
+    import json, os
+    path = os.path.join(os.path.dirname(__file__), "config.json")
+    if os.path.exists(path):
+        with open(path) as f:
+            return json.load(f).get("smtp", {})
+    return {}
 
-def auto_send_job():
-    """Send next email in queue if sending is active."""
-    config = get_send_config()
+def check_schedule(config):
+    """Check if current time is within send hours"""
+    if not config.get("use_schedule", True):
+        return True
+    tz = pytz.timezone(config.get("timezone", "Europe/Zurich"))
+    now = datetime.now(tz)
+    if now.weekday() >= 5:  # Saturday=5, Sunday=6
+        return False
+    hour = now.hour
+    h1, h2 = config.get("send_hour_start", 9), config.get("send_hour_end_morning", 12)
+    h3, h4 = config.get("send_hour_start_afternoon", 14), config.get("send_hour_end", 17)
+    return (h1 <= hour < h2) or (h3 <= hour < h4)
+
+def auto_send():
+    from database import get_db, log_activity, update_heat_score
+    from email_sender import send_email, replace_vars, build_html
+
+    conn = get_db()
+    config = dict(conn.execute("SELECT * FROM send_config WHERE id=1").fetchone())
+
     if not config.get("sending"):
+        conn.close()
         return
 
-    queue = get_queue_prospects()
-    if not queue:
+    if not check_schedule(config):
+        conn.close()
         return
 
-    success, msg, prospect = send_next_in_queue()
-    if success:
-        print(f"[AutoSend] ✓ Envoyé à {prospect['name'] or prospect['email']}")
-    else:
-        print(f"[AutoSend] ✗ {msg}")
+    # Check frequency
+    if config.get("last_sent_at") and config.get("frequency_seconds", 0) > 0:
+        from datetime import datetime, timedelta
+        last = datetime.fromisoformat(config["last_sent_at"])
+        if (datetime.utcnow() - last).total_seconds() < config["frequency_seconds"]:
+            conn.close()
+            return
 
+    smtp = get_smtp_config()
+    if not smtp.get("host") or not smtp.get("email"):
+        conn.close()
+        return
 
-def check_replies_job():
-    """Check IMAP for new replies."""
-    try:
-        replies = check_replies()
-        for r in replies:
-            print(f"[IMAP] Réponse détectée de {r['from']}: {r['subject']}")
-    except Exception as e:
-        print(f"[IMAP Error] {e}")
+    base_url = f"http://localhost:8000"
+    batch_size = config.get("batch_size", 1) or 1
+    sent_count = 0
 
+    for _ in range(batch_size):
+        # Try followup first
+        followup = conn.execute("""
+            SELECT p.*, ss.id as step_id, ss.subject as step_subject, ss.body as step_body, ss.step_order as next_step
+            FROM prospects p
+            JOIN sequence_steps ss ON ss.sequence_id = p.sequence_id AND ss.step_order = p.current_step + 1
+            WHERE p.status IN ('sent','waiting') AND p.replied_at IS NULL
+              AND p.sequence_completed = 0 AND p.sequence_id IS NOT NULL
+              AND p.last_step_sent_at IS NOT NULL
+              AND datetime(p.last_step_sent_at, '+' || ss.delay_days || ' days') < datetime('now')
+            LIMIT 1
+        """).fetchone()
 
-def auto_status_rules_job():
-    """
-    Apply automatic status rules:
-    - Opened but no reply after 2h → 'waiting'
-    - Sent, no reply after 10 days → 'refused' (auto)
-    """
-    prospects = get_all_prospects()
-    now = datetime.utcnow()
+        if followup:
+            p = dict(followup)
+            bl = conn.execute("SELECT id FROM blacklist WHERE email=?", (p["email"].lower(),)).fetchone()
+            if bl:
+                conn.execute("UPDATE prospects SET status='refused', sequence_completed=1 WHERE id=?", (p["id"],))
+                conn.commit()
+                continue
 
-    for p in prospects:
-        # Rule 1: Sent + opened but no reply after 2 hours → waiting
-        if p["status"] == "sent" and p.get("opened_at") and not p.get("replied_at"):
-            opened = datetime.fromisoformat(p["opened_at"])
-            if now - opened > timedelta(hours=2):
-                update_prospect(p["id"], status="waiting")
-                print(f"[AutoRule] {p['email']} → En attente (ouvert sans réponse > 2h)")
+            subject = replace_vars(p["step_subject"], p)
+            html = build_html(replace_vars(p["step_body"], p), p, base_url)
+            ok, err, bounce = send_email(smtp, p["email"], subject, html, f"{base_url}/unsubscribe/{p['unsubscribe_token']}")
 
-        # Rule 2: Sent/waiting, no reply after 10 days → refused
-        if p["status"] in ("sent", "waiting") and p.get("sent_at") and not p.get("replied_at"):
-            sent = datetime.fromisoformat(p["sent_at"])
-            if now - sent > timedelta(days=10):
-                update_prospect(
-                    p["id"],
-                    status="refused",
-                    notes=(p.get("notes", "") + "\n[Refus automatique — 10 jours sans réponse]").strip()
-                )
-                print(f"[AutoRule] {p['email']} → Refusé (10 jours sans réponse)")
+            if ok:
+                has_next = conn.execute("SELECT id FROM sequence_steps WHERE sequence_id=? AND step_order>?", (p["sequence_id"], p["next_step"])).fetchone()
+                conn.execute("UPDATE prospects SET current_step=?, last_step_sent_at=datetime('now'), sequence_completed=? WHERE id=?",
+                    (p["next_step"], 0 if has_next else 1, p["id"]))
+                conn.execute("INSERT INTO emails_log (prospect_id,direction,subject,body) VALUES (?,?,?,?)", (p["id"],"outbound",subject,html))
+                log_activity("sent", p["id"], p["email"])
+                sent_count += 1
+            elif bounce:
+                conn.execute("UPDATE prospects SET bounced=1, bounce_reason=?, status='refused', sequence_completed=1 WHERE id=?", (err, p["id"]))
+            conn.commit()
+            continue
 
+        # No followup — send next in queue
+        prospect = conn.execute("SELECT * FROM prospects WHERE status='queue' ORDER BY added_at ASC LIMIT 1").fetchone()
+        if not prospect:
+            break
 
-def update_send_schedule(frequency_seconds: int):
-    """Update the auto-send job interval."""
-    if scheduler.get_job(_send_job_id):
-        scheduler.remove_job(_send_job_id)
+        p = dict(prospect)
+        bl = conn.execute("SELECT id FROM blacklist WHERE email=?", (p["email"].lower(),)).fetchone()
+        if bl:
+            conn.execute("UPDATE prospects SET status='refused' WHERE id=?", (p["id"],))
+            conn.commit()
+            continue
 
-    if frequency_seconds > 0:
-        scheduler.add_job(
-            auto_send_job,
-            trigger=IntervalTrigger(seconds=frequency_seconds),
-            id=_send_job_id,
-            replace_existing=True,
-            max_instances=1
-        )
-        print(f"[Scheduler] Auto-send every {frequency_seconds}s")
-    else:
-        print("[Scheduler] Auto-send disabled (instant mode — use API endpoint)")
+        # ALWAYS use template for first contact
+        tpl = dict(conn.execute("SELECT * FROM email_template WHERE id=1").fetchone())
+        subject = replace_vars(tpl.get("subject","Hello"), p)
+        body_text = replace_vars(tpl.get("body",""), p)
+        html = build_html(body_text, p, base_url)
+        ok, err, bounce = send_email(smtp, p["email"], subject, html, f"{base_url}/unsubscribe/{p['unsubscribe_token']}")
 
+        if ok:
+            conn.execute("UPDATE prospects SET status='sent', sent_at=datetime('now'), last_step_sent_at=datetime('now'), current_step=1 WHERE id=?", (p["id"],))
+            conn.execute("INSERT INTO emails_log (prospect_id,direction,subject,body) VALUES (?,?,?,?)", (p["id"],"outbound",subject,html))
+            log_activity("sent", p["id"], p["email"])
+            sent_count += 1
+        elif bounce:
+            conn.execute("UPDATE prospects SET bounced=1, bounce_reason=?, status='refused' WHERE id=?", (err, p["id"]))
+        conn.commit()
+
+    # Update last_sent_at
+    if sent_count > 0:
+        conn.execute("UPDATE send_config SET last_sent_at=datetime('now') WHERE id=1")
+        conn.commit()
+    conn.close()
+
+def auto_status_rules():
+    """Auto-update statuses based on rules"""
+    from database import get_db, log_activity
+    conn = get_db()
+    # Opened > 2h without reply → waiting
+    conn.execute("""UPDATE prospects SET status='waiting'
+        WHERE status='sent' AND opened_at IS NOT NULL AND replied_at IS NULL
+        AND datetime(opened_at, '+2 hours') < datetime('now')""")
+    # Sent > 10 days without reply → refused
+    conn.execute("""UPDATE prospects SET status='refused'
+        WHERE status IN ('sent','waiting') AND replied_at IS NULL
+        AND datetime(sent_at, '+10 days') < datetime('now')""")
+    conn.commit()
+    conn.close()
 
 def start_scheduler():
-    """Start background scheduler with all jobs."""
-    config = get_send_config()
-
-    # Auto-send job (if frequency > 0)
-    freq = config.get("frequency_seconds", 1200)
-    if freq > 0 and config.get("sending"):
-        scheduler.add_job(
-            auto_send_job,
-            trigger=IntervalTrigger(seconds=freq),
-            id=_send_job_id,
-            replace_existing=True,
-            max_instances=1
-        )
-
-    # Check replies every 2 minutes
-    scheduler.add_job(
-        check_replies_job,
-        trigger=IntervalTrigger(minutes=2),
-        id="check_replies",
-        replace_existing=True,
-        max_instances=1
-    )
-
-    # Auto-status rules every 5 minutes
-    scheduler.add_job(
-        auto_status_rules_job,
-        trigger=IntervalTrigger(minutes=5),
-        id="auto_status_rules",
-        replace_existing=True,
-        max_instances=1
-    )
-
+    scheduler.add_job(auto_send, 'interval', seconds=60, id='auto_send', replace_existing=True)
+    scheduler.add_job(auto_status_rules, 'interval', minutes=5, id='auto_rules', replace_existing=True)
     scheduler.start()
-    print("[Scheduler] Démarré — auto-send, IMAP check, status rules actifs")
-
-
-def stop_scheduler():
-    """Stop all background jobs."""
-    if scheduler.running:
-        scheduler.shutdown(wait=False)
